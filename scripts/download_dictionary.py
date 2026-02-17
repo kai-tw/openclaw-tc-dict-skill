@@ -24,7 +24,6 @@ import logging
 import os
 import re
 import shutil
-import ssl
 import sys
 import tempfile
 import urllib.error
@@ -33,18 +32,41 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-# Create SSL context that doesn't verify certificates
-# (MOE website may have certificate issues)
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def validate_zip_path(zip_path: str, extract_to: Path) -> bool:
+    """
+    Validate that a zip member path does not escape the target directory.
+    
+    Prevents zip-slip attacks where a zip file contains paths like:
+    - ../../../etc/passwd
+    - /absolute/path/file
+    
+    Args:
+        zip_path: Path from zip file
+        extract_to: Target extraction directory
+    
+    Returns:
+        True if path is safe, False otherwise
+    """
+    # Resolve the would-be extraction path
+    target = (extract_to / zip_path).resolve()
+    extract_to_resolved = extract_to.resolve()
+    
+    # Check if target is within extract_to
+    try:
+        target.relative_to(extract_to_resolved)
+        return True
+    except ValueError:
+        # Path is outside extract_to directory
+        logger.warning(f"Rejecting unsafe zip path: {zip_path}")
+        return False
 
 
 class DictionaryDownloader:
@@ -119,25 +141,24 @@ class DictionaryDownloader:
             raise ValueError(f"Unknown dictionary: {dict_name}")
         
         try:
-            # For now, return hardcoded latest; in production, parse MOE webpage
-            # This would require scraping or API call to MOE site
             page_url = 'https://language.moe.gov.tw/001/Upload/Files/site_content/M0001/respub/dict_concised_download.html'
             
-            with urllib.request.urlopen(page_url, timeout=10, context=ssl_context) as response:
+            # Use urllib with proper SSL verification (default context)
+            with urllib.request.urlopen(page_url, timeout=10) as response:
                 html = response.read().decode('utf-8')
                 
-                # Extract version from filename pattern: dict_concised_2014_YYYYMMDD
-                pattern = r'dict_concised_2014_(\d{8})'
-                matches = re.findall(pattern, html)
-                
-                if matches:
-                    # Return the latest (highest) version
-                    latest = sorted(matches, reverse=True)[0]
-                    logger.info(f"Latest version from MOE: {latest}")
-                    return latest
-                else:
-                    logger.warning("Could not extract version from MOE page")
-                    return None
+            # Extract version from filename pattern: dict_concised_2014_YYYYMMDD
+            pattern = r'dict_concised_2014_(\d{8})'
+            matches = re.findall(pattern, html)
+            
+            if matches:
+                # Return the latest (highest) version
+                latest = sorted(matches, reverse=True)[0]
+                logger.info(f"Latest version from MOE: {latest}")
+                return latest
+            else:
+                logger.warning("Could not extract version from MOE page")
+                return None
         
         except Exception as e:
             logger.error(f"Failed to fetch latest version: {e}")
@@ -145,7 +166,7 @@ class DictionaryDownloader:
     
     def download_and_extract(self, dict_name: str, version: str) -> dict:
         """
-        Download dictionary zip and extract.
+        Download dictionary zip and extract with security validation.
         
         Args:
             dict_name: Dictionary identifier
@@ -163,37 +184,40 @@ class DictionaryDownloader:
         
         logger.info(f"Downloading {dict_name} v{version}...")
         
+        tmp_path = None
         try:
             # Download to temporary file
             with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
                 tmp_path = tmp.name
             
-            # Download zip
-            with urllib.request.urlopen(download_url, timeout=30, context=ssl_context) as response:
+            # Download zip with proper SSL verification
+            with urllib.request.urlopen(download_url, timeout=30) as response:
                 with open(tmp_path, 'wb') as f:
                     shutil.copyfileobj(response, f)
             
             logger.info(f"Downloaded {os.path.getsize(tmp_path)} bytes")
             
-            # Extract to storage (create version-specific folder)
+            # Extract to storage with zip-slip protection
             extract_path = self.storage_path / extract_folder
             extract_path.mkdir(parents=True, exist_ok=True)
             
+            # Securely extract zip file, validating all paths
             with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
-                # List all files in zip
-                file_list = zip_ref.namelist()
-                logger.info(f"Zip contains: {file_list}")
+                # Validate all members before extraction
+                for member in zip_ref.namelist():
+                    if not validate_zip_path(member, extract_path):
+                        raise ValueError(f"Zip file contains unsafe path: {member}")
                 
-                # Extract directly to version folder
+                logger.info(f"Zip contains: {zip_ref.namelist()}")
                 zip_ref.extractall(extract_path)
             
             logger.info(f"Extracted to {extract_path}")
             
             # Clean up temp file
-            os.unlink(tmp_path)
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
             
             # Find xlsx file (could be versioned filename or standard filename)
-            # Try versioned filename first: dict_concised_2014_20251229.xlsx
             versioned_filename = f"dict_concised_2014_{version}.xlsx"
             xlsx_candidates = [
                 extract_path / versioned_filename,
@@ -222,14 +246,14 @@ class DictionaryDownloader:
                 'dict_name': dict_name,
                 'version': version,
                 'xlsx_path': str(xlsx_path),
-                'xlsx_filename': xlsx_path.name,  # Store actual filename
+                'xlsx_filename': xlsx_path.name,
                 'extract_path': str(extract_path),
                 'timestamp': datetime.utcnow().isoformat() + 'Z',
             }
         
         except Exception as e:
             logger.error(f"Download/extract failed: {e}")
-            if 'tmp_path' in locals():
+            if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.unlink(tmp_path)
                 except:
@@ -280,7 +304,7 @@ class DictionaryDownloader:
                 'version': latest_version,
                 'downloaded_at': result['timestamp'],
                 'path': result['extract_path'],
-                'filename': result['xlsx_filename'],  # Use actual filename from result
+                'filename': result['xlsx_filename'],
             }
             self.save_metadata(metadata)
             logger.info(f"Updated {dict_name} to v{latest_version}")
@@ -302,21 +326,24 @@ def main():
         downloader = DictionaryDownloader(args.storage_path)
         
         if args.check_only:
-            latest = downloader.get_latest_version(args.dict_name)
-            print(json.dumps({
-                'success': latest is not None,
-                'latest_version': latest,
-            }))
+            # Just check version
+            version = downloader.get_latest_version(args.dict_name)
+            result = {
+                'dict_name': args.dict_name,
+                'latest_version': version,
+            }
         else:
-            result = downloader.update_dictionary(args.dict_name, force=args.force)
-            print(json.dumps(result))
-            sys.exit(0 if result['success'] else 1)
+            # Update dictionary
+            result = downloader.update_dictionary(args.dict_name, args.force)
+        
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        sys.exit(0 if result.get('success', True) else 1)
     
     except Exception as e:
         print(json.dumps({
             'success': False,
             'error': str(e),
-        }), file=sys.stderr)
+        }, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
 

@@ -24,16 +24,10 @@ import argparse
 import json
 import logging
 import re
-import ssl
 import sys
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-
-# Create SSL context that doesn't verify certificates
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
 
 # Configure logging for cron jobs
 logging.basicConfig(
@@ -113,7 +107,7 @@ class UpdateChecker:
         try:
             logger.info(f"Checking {dict_name} at {info['url']}...")
             
-            with urllib.request.urlopen(info['url'], timeout=10, context=ssl_context) as response:
+            with urllib.request.urlopen(info['url'], timeout=10) as response:
                 html = response.read().decode('utf-8')
                 
                 # Extract version from filename pattern

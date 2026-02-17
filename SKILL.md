@@ -21,6 +21,18 @@ pip install -r requirements.txt
 - `pandas>=2.0.0` — Data processing
 - `openpyxl>=3.1.0` — Excel file reading
 
+## Security
+
+This skill implements the following security measures:
+
+✅ **TLS Certificate Verification** — All HTTPS connections to MOE servers use proper SSL/TLS certificate validation (no disabled verification)
+
+✅ **Zip-Slip Protection** — Dictionary downloads validate all zip file paths before extraction to prevent directory traversal attacks (path validation applied)
+
+✅ **Safe File Handling** — Extracted files are validated and stored in user-isolated directory (`~/.openclaw/dictionaries/`)
+
+⚠️ **Cron/Automatic Updates** — If you enable automatic updates via cron, the skill will download dictionary files from MOE on your specified schedule. Consider the frequency and enable notifications to track changes.
+
 ## Overview
 
 This skill enables you to query Traditional Chinese dictionaries published by Taiwan's Ministry of Education. It provides:
