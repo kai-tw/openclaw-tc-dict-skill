@@ -5,6 +5,22 @@ description: Query Traditional Chinese dictionaries from Ministry of Education (
 
 # OpenClaw Traditional Chinese Dictionary Skill
 
+## Installation
+
+This skill requires Python dependencies. Install them with `uv`:
+
+```bash
+# Install dependencies (recommended: use uv for faster installation)
+uv pip install -r requirements.txt
+
+# Alternative: use pip if uv is not available
+pip install -r requirements.txt
+```
+
+**Required packages:**
+- `pandas>=2.0.0` — Data processing
+- `openpyxl>=3.1.0` — Excel file reading
+
 ## Overview
 
 This skill enables you to query Traditional Chinese dictionaries published by Taiwan's Ministry of Education. It provides:

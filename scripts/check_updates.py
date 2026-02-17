@@ -5,6 +5,9 @@ Check for dictionary updates.
 This script is designed to be run via cron job to periodically check
 if new dictionary versions are available from MOE.
 
+Requirements:
+    No dependencies required (uses only stdlib)
+
 Usage:
     python check_updates.py [--dict-name DICT_NAME] [--storage-path PATH] [--auto-update]
 

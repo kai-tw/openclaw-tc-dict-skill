@@ -2,6 +2,10 @@
 """
 Download and manage Traditional Chinese dictionary data from MOE.
 
+Requirements:
+    Install dependencies: uv pip install -r requirements.txt
+    (or: pip install pandas openpyxl)
+
 Usage:
     python download_dictionary.py [--dict-name DICT_NAME] [--storage-path PATH] [--force]
 

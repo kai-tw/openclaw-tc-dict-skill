@@ -2,6 +2,10 @@
 """
 Query Traditional Chinese dictionary.
 
+Requirements:
+    Install dependencies: uv pip install -r requirements.txt
+    (or: pip install pandas openpyxl)
+
 Usage:
     python query_dictionary.py --word WORD [--dict-name DICT_NAME] [--storage-path PATH] [--full]
 
