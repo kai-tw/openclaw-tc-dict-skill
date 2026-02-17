@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import shutil
+import ssl
 import sys
 import tempfile
 import urllib.error
@@ -27,6 +28,12 @@ import urllib.request
 import zipfile
 from datetime import datetime
 from pathlib import Path
+
+# Create SSL context that doesn't verify certificates
+# (MOE website may have certificate issues)
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
 
 # Configure logging
 logging.basicConfig(
@@ -112,7 +119,7 @@ class DictionaryDownloader:
             # This would require scraping or API call to MOE site
             page_url = 'https://language.moe.gov.tw/001/Upload/Files/site_content/M0001/respub/dict_concised_download.html'
             
-            with urllib.request.urlopen(page_url, timeout=10) as response:
+            with urllib.request.urlopen(page_url, timeout=10, context=ssl_context) as response:
                 html = response.read().decode('utf-8')
                 
                 # Extract version from filename pattern: dict_concised_2014_YYYYMMDD
@@ -158,30 +165,51 @@ class DictionaryDownloader:
                 tmp_path = tmp.name
             
             # Download zip
-            with urllib.request.urlopen(download_url, timeout=30) as response:
+            with urllib.request.urlopen(download_url, timeout=30, context=ssl_context) as response:
                 with open(tmp_path, 'wb') as f:
                     shutil.copyfileobj(response, f)
             
             logger.info(f"Downloaded {os.path.getsize(tmp_path)} bytes")
             
-            # Extract to storage
+            # Extract to storage (create version-specific folder)
             extract_path = self.storage_path / extract_folder
-            if extract_path.exists():
-                logger.info(f"Removing old version at {extract_path}")
-                shutil.rmtree(extract_path)
+            extract_path.mkdir(parents=True, exist_ok=True)
             
             with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
-                zip_ref.extractall(self.storage_path)
+                # List all files in zip
+                file_list = zip_ref.namelist()
+                logger.info(f"Zip contains: {file_list}")
+                
+                # Extract directly to version folder
+                zip_ref.extractall(extract_path)
             
             logger.info(f"Extracted to {extract_path}")
             
             # Clean up temp file
             os.unlink(tmp_path)
             
-            # Verify xlsx exists
-            xlsx_path = extract_path / source['xlsx_filename']
-            if not xlsx_path.exists():
-                raise FileNotFoundError(f"xlsx not found at {xlsx_path}")
+            # Find xlsx file (could be versioned filename or standard filename)
+            # Try versioned filename first: dict_concised_2014_20251229.xlsx
+            versioned_filename = f"dict_concised_2014_{version}.xlsx"
+            xlsx_candidates = [
+                extract_path / versioned_filename,
+                extract_path / source['xlsx_filename'],
+            ]
+            
+            # Also check for any .xlsx files in the folder
+            xlsx_files = list(extract_path.glob('*.xlsx'))
+            
+            xlsx_path = None
+            for candidate in xlsx_candidates:
+                if candidate.exists():
+                    xlsx_path = candidate
+                    break
+            
+            if not xlsx_path and xlsx_files:
+                xlsx_path = xlsx_files[0]
+            
+            if not xlsx_path or not xlsx_path.exists():
+                raise FileNotFoundError(f"xlsx not found in {extract_path}. Files: {list(extract_path.glob('*'))}")
             
             logger.info(f"Dictionary file: {xlsx_path}")
             
@@ -190,6 +218,7 @@ class DictionaryDownloader:
                 'dict_name': dict_name,
                 'version': version,
                 'xlsx_path': str(xlsx_path),
+                'xlsx_filename': xlsx_path.name,  # Store actual filename
                 'extract_path': str(extract_path),
                 'timestamp': datetime.utcnow().isoformat() + 'Z',
             }
@@ -247,7 +276,7 @@ class DictionaryDownloader:
                 'version': latest_version,
                 'downloaded_at': result['timestamp'],
                 'path': result['extract_path'],
-                'filename': self.SOURCES[dict_name]['xlsx_filename'],
+                'filename': result['xlsx_filename'],  # Use actual filename from result
             }
             self.save_metadata(metadata)
             logger.info(f"Updated {dict_name} to v{latest_version}")
